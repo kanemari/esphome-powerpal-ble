@@ -1,7 +1,7 @@
 import logging
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import sensor, ble_client, time
+from esphome.components import sensor, ble_client, time, http_request
 from esphome.const import (
     CONF_ID,
     CONF_BATTERY_LEVEL,
@@ -32,6 +32,7 @@ CONF_PAIRING_CODE = "pairing_code"
 CONF_NOTIFICATION_INTERVAL = "notification_interval"
 CONF_PULSES_PER_KWH = "pulses_per_kwh"
 CONF_COST_PER_KWH = "cost_per_kwh"
+CONF_HTTP_REQUEST_ID = "http_request_id"
 CONF_POWERPAL_DEVICE_ID = "powerpal_device_id"
 CONF_POWERPAL_APIKEY = "powerpal_apikey"
 CONF_DAILY_ENERGY = "daily_energy"
@@ -42,6 +43,10 @@ CONF_COST = "cost"
 CONF_DAILY_PULSES = "daily_pulses"
 
 def _validate(config):
+    if CONF_HTTP_REQUEST_ID in config and CONF_COST_PER_KWH not in config:
+        raise cv.Invalid(
+            f"If using the Powerpal cloud uploader, you must also set '{CONF_COST_PER_KWH}'"
+        )
     if CONF_DAILY_ENERGY in config and CONF_TIME_ID not in config:
         _LOGGER.warning(
             "Using daily_energy without a time_id means relying on your Powerpal's RTC for packet times, which is not recommended. "
@@ -126,6 +131,9 @@ CONFIG_SCHEMA = cv.All(
                 accuracy_decimals=0,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             ),
+            cv.Optional(CONF_HTTP_REQUEST_ID): cv.use_id(
+                http_request.HttpRequestComponent
+            ),
             cv.Optional(CONF_COST_PER_KWH): cv.float_range(min=0),
             cv.Optional(
                 CONF_POWERPAL_DEVICE_ID
@@ -198,6 +206,14 @@ async def to_code(config):
 
     if CONF_POWERPAL_DEVICE_ID in config:
         cg.add(var.set_device_id(config[CONF_POWERPAL_DEVICE_ID]))
+
+    if CONF_POWERPAL_APIKEY in config:
+        cg.add(var.set_apikey(config[CONF_POWERPAL_APIKEY]))
+
+    if CONF_HTTP_REQUEST_ID in config:
+        cg.add_define("POWERPAL_BLE_CLOUD_UPLOAD")
+        cloud_uploader = await cg.get_variable(config[CONF_HTTP_REQUEST_ID])
+        cg.add(var.set_http_request(cloud_uploader))
 
     if CONF_POWERPAL_APIKEY in config:
         cg.add(var.set_apikey(config[CONF_POWERPAL_APIKEY]))

@@ -1,6 +1,7 @@
 #include "powerpal_ble.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
+#include "esphome/components/network/util.h"
 
 #ifdef USE_ESP32
 namespace esphome {
@@ -84,6 +85,13 @@ void Powerpal::parse_measurement_(const uint8_t *data, uint16_t length) {
       //int mywatt_hrs = (uint32_t)roundf(pulses_within_interval * (this->pulses_per_kwh_ / kw_to_w_conversion));
        this->timestamp_sensor_->publish_state(new_time);
     }
+#ifdef POWERPAL_BLE_CLOUD_UPLOAD
+    if (this->cloud_uploader_ != nullptr) {
+      this->store_measurement_(pulses_within_interval, unix_time,
+                               (uint32_t) roundf(pulses_within_interval * kw_to_w_conversion / this->pulses_per_kwh_),
+                               (pulses_within_interval / this->pulses_per_kwh_) * this->energy_cost_);
+    }
+#endif
     if (this->energy_sensor_ != nullptr) {
       this->total_pulses_ += pulses_within_interval;
       float energy = this->total_pulses_ / this->pulses_per_kwh_;
@@ -130,6 +138,70 @@ void Powerpal::parse_measurement_(const uint8_t *data, uint16_t length) {
 
   }
 }
+
+#ifdef POWERPAL_BLE_CLOUD_UPLOAD
+static const uint8_t UPLOAD_BATCH_SIZE = 15;      // readings per request, as the Powerpal app does
+static const uint8_t MAX_STORED_MEASUREMENTS = 60;  // bound memory if the cloud is unreachable
+static const uint32_t UPLOAD_RETRY_MS = 60000;
+static const char *const POWERPAL_API_URL = "https://readings.powerpal.net/api/v1/meter_reading/";
+
+void Powerpal::store_measurement_(uint16_t pulses, time_t timestamp, uint32_t watt_hours, float cost) {
+  if (this->stored_measurements_.size() >= MAX_STORED_MEASUREMENTS) {
+    this->stored_measurements_.erase(this->stored_measurements_.begin());  // drop oldest
+  }
+  this->stored_measurements_.push_back({pulses, timestamp, watt_hours, cost});
+}
+
+bool Powerpal::upload_data_to_cloud_() {
+  if (!this->powerpal_device_id_.length() || !this->powerpal_apikey_.length()) {
+    ESP_LOGW(TAG, "Cloud upload skipped: device id or apikey not known yet");
+    return false;
+  }
+  const size_t count = std::min<size_t>(this->stored_measurements_.size(), UPLOAD_BATCH_SIZE);
+  std::string body = "[";
+  char buf[160];
+  for (size_t i = 0; i < count; i++) {
+    const PowerpalMeasurement &m = this->stored_measurements_[i];
+    snprintf(buf, sizeof(buf),
+             "%s{\"timestamp\":%lld,\"pulses\":%u,\"watt_hours\":%u,\"cost\":%.8f,\"is_peak\":false}",
+             i ? "," : "", (long long) m.timestamp, (unsigned) m.pulses, (unsigned) m.watt_hours, (double) m.cost);
+    body += buf;
+  }
+  body += "]";
+
+  std::string url = std::string(POWERPAL_API_URL) + this->powerpal_device_id_;
+  std::vector<http_request::Header> headers;
+  headers.push_back({"Authorization", this->powerpal_apikey_});
+  headers.push_back({"Content-Type", "application/json"});
+  headers.push_back({"Accept", "application/json"});
+
+  auto container = this->cloud_uploader_->post(url, body, headers);
+  if (container == nullptr) {
+    ESP_LOGW(TAG, "Cloud upload failed: no response");
+    return false;
+  }
+  int status = container->status_code;
+  container->end();
+  if (!http_request::is_success(status)) {
+    ESP_LOGW(TAG, "Cloud upload failed: HTTP %d", status);
+    return false;
+  }
+  ESP_LOGI(TAG, "Cloud upload OK: %u readings, HTTP %d", (unsigned) count, status);
+  this->stored_measurements_.erase(this->stored_measurements_.begin(), this->stored_measurements_.begin() + count);
+  return true;
+}
+
+void Powerpal::loop() {
+  if (this->cloud_uploader_ == nullptr || this->stored_measurements_.size() < UPLOAD_BATCH_SIZE)
+    return;
+  if (!network::is_connected() || (int32_t)(millis() - this->next_upload_attempt_ms_) < 0)
+    return;
+  if (!this->upload_data_to_cloud_())
+    this->next_upload_attempt_ms_ = millis() + UPLOAD_RETRY_MS;
+}
+#else
+void Powerpal::loop() {}
+#endif
 
 std::string Powerpal::uuid_to_device_id_(const uint8_t *data, uint16_t length) {
   const char* hexmap[] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};

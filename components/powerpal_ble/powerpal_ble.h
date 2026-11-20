@@ -7,6 +7,10 @@
 #include "esphome/core/defines.h"
 #include "esphome/core/helpers.h"
 
+#ifdef POWERPAL_BLE_CLOUD_UPLOAD
+#include "esphome/components/http_request/http_request.h"
+#endif
+
 #ifdef USE_TIME
 #include "esphome/components/time/real_time_clock.h"
 #else
@@ -57,7 +61,7 @@ class Powerpal : public esphome::ble_client::BLEClientNode, public Component {
   // class Powerpal : public esphome::ble_client::BLEClientNode, public PollingComponent {
  public:
   void setup() override;
-  // void loop() override;
+  void loop() override;
   void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                            esp_ble_gattc_cb_param_t *param) override;
   void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) override;
@@ -75,6 +79,9 @@ class Powerpal : public esphome::ble_client::BLEClientNode, public Component {
   void set_daily_pulses_sensor(sensor::Sensor *daily_pulses_sensor) { daily_pulses_sensor_ = daily_pulses_sensor;}
 #ifdef USE_TIME
   void set_time(time::RealTimeClock *time) { time_ = time; }
+#endif
+#ifdef POWERPAL_BLE_CLOUD_UPLOAD
+  void set_http_request(http_request::HttpRequestComponent *cloud_uploader) { cloud_uploader_ = cloud_uploader; }
 #endif
   void set_pulses_per_kwh(float pulses_per_kwh) { pulses_per_kwh_ = pulses_per_kwh; }
   void set_pairing_code(uint32_t pairing_code) {
@@ -97,6 +104,13 @@ class Powerpal : public esphome::ble_client::BLEClientNode, public Component {
  
   std::string uuid_to_device_id_(const uint8_t *data, uint16_t length);
   std::string serial_to_apikey_(const uint8_t *data, uint16_t length);
+
+#ifdef POWERPAL_BLE_CLOUD_UPLOAD
+  void store_measurement_(uint16_t pulses, time_t timestamp, uint32_t watt_hours, float cost);
+  bool upload_data_to_cloud_();
+  http_request::HttpRequestComponent *cloud_uploader_{nullptr};
+  uint32_t next_upload_attempt_ms_{0};
+#endif
 
 
   bool authenticated_;
