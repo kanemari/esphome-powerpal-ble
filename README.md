@@ -9,6 +9,8 @@ longer maintained and does not build on current ESPHome. This repository keeps i
 
 This project is not affiliated with Powerpal.
 
+Developed with help from Claude (Anthropic).
+
 ## Status
 
 Tested on an `esp32dev` board with the Arduino framework on ESPHome **2026.11.0**, with two gateways each
