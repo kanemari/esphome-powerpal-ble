@@ -130,3 +130,8 @@ get a confirmation, leaving the gateway connected but silent.
 
 **v1.0.0** Builds on ESPHome 2026.11: removed an unused `WiFi.h` include and updated `address_str()` use (it now
 returns `const char*`).
+
+## Licence
+
+Derived from ESPHome. The C++ files (`.cpp`, `.h`) are GPLv3 and the Python files are MIT, as in ESPHome itself.
+See [LICENSE](LICENSE).
