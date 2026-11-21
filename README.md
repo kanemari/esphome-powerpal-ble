@@ -43,3 +43,10 @@ Every 15 readings are POSTed to `https://readings.powerpal.net/api/v1/meter_read
 Failed uploads retry after 60 s; at most 60 readings are held in RAM.
 The uploaded `watt_hours` is `pulses * 1000 / pulses_per_kwh`; the legacy `watt_hours` sensor is unchanged.
 
+## Pairing fix (v1.1.2)
+
+The pairing-code write is now sent only after both authentication and service discovery have completed,
+and is retried (up to 3 times, 8 s apart) if the Powerpal does not confirm it, then the link is dropped
+so the BLE client reconnects. Previously the write could be issued while service discovery was still
+running, and a slow link never got a write confirmation.
+

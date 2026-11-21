@@ -232,9 +232,17 @@ void Powerpal::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
   switch (event) {
     case ESP_GATTC_DISCONNECT_EVT: {
       this->authenticated_ = false;
+      this->auth_complete_ = false;
+      this->search_complete_ = false;
+      this->pairing_write_sent_ = false;
+      this->pairing_attempts_ = 0;
+      this->cancel_timeout("pairing_retry");
       break;
     }
     case ESP_GATTC_SEARCH_CMPL_EVT: {
+      ESP_LOGD(TAG, "[%s] Service discovery complete (auth %s)", this->parent_->address_str(),
+               this->auth_complete_ ? "done" : "pending");
+      this->search_complete_ = true;
       // auto *pairing_code_char_ = this->parent_->get_characteristic(POWERPAL_SERVICE_UUID,
       // POWERPAL_CHARACTERISTIC_PAIRING_CODE_UUID); if (pairing_code_char_ == nullptr) {
       //   ESP_LOGE(TAG, "[%s] No Powerpal service or Pairing Code Characteristic found at device, not a POWERPAL..?",
@@ -283,6 +291,7 @@ void Powerpal::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gat
       //   ESP_LOGE(TAG, "SERIAL HANDLE: %d",this->serial_number_char_handle_);
       // }
 
+      this->try_pairing_write_();
       break;
     }
     case ESP_GATTC_READ_CHAR_EVT: {
@@ -474,19 +483,50 @@ void Powerpal::gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_pa
     // This event is sent once authentication has completed
     case ESP_GAP_BLE_AUTH_CMPL_EVT: {
       if (param->ble_security.auth_cmpl.success) {
-        ESP_LOGI(TAG, "[%s] Writing pairing code to Powerpal", this->parent_->address_str());
-        auto status = esp_ble_gattc_write_char(this->parent()->get_gattc_if(), this->parent()->get_conn_id(),
-                                               this->pairing_code_char_handle_, sizeof(this->pairing_code_),
-                                               this->pairing_code_, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
-        if (status) {
-          ESP_LOGW(TAG, "Error sending write request for pairing_code, status=%d", status);
-        }
+        ESP_LOGD(TAG, "[%s] Authentication complete (service discovery %s)", this->parent_->address_str(),
+                 this->search_complete_ ? "done" : "pending");
+        this->auth_complete_ = true;
+        this->try_pairing_write_();
+      } else {
+        ESP_LOGW(TAG, "[%s] Authentication failed, fail_reason=%d", this->parent_->address_str(),
+                 (int) param->ble_security.auth_cmpl.fail_reason);
       }
       break;
     }
     default:
       break;
   }
+}
+
+void Powerpal::try_pairing_write_() {
+  if (!this->auth_complete_ || !this->search_complete_ || this->pairing_write_sent_ || this->authenticated_)
+    return;
+  this->send_pairing_code_();
+}
+
+void Powerpal::send_pairing_code_() {
+  this->pairing_write_sent_ = true;
+  this->pairing_attempts_++;
+  ESP_LOGI(TAG, "[%s] Writing pairing code to Powerpal (attempt %u)", this->parent_->address_str(),
+           (unsigned) this->pairing_attempts_);
+  auto status = esp_ble_gattc_write_char(this->parent()->get_gattc_if(), this->parent()->get_conn_id(),
+                                         this->pairing_code_char_handle_, sizeof(this->pairing_code_),
+                                         this->pairing_code_, ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+  if (status) {
+    ESP_LOGW(TAG, "Error sending write request for pairing_code, status=%d", status);
+  }
+  this->set_timeout("pairing_retry", 8000, [this]() {
+    if (this->authenticated_)
+      return;
+    if (this->pairing_attempts_ >= 3) {
+      ESP_LOGW(TAG, "[%s] Pairing code write not confirmed after %u attempts, disconnecting to retry",
+               this->parent_->address_str(), (unsigned) this->pairing_attempts_);
+      this->parent()->disconnect();
+      return;
+    }
+    ESP_LOGW(TAG, "[%s] Pairing code write not confirmed after 8 s, retrying", this->parent_->address_str());
+    this->send_pairing_code_();
+  });
 }
 
 }  // namespace powerpal_ble

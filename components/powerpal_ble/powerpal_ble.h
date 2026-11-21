@@ -115,6 +115,16 @@ class Powerpal : public esphome::ble_client::BLEClientNode, public Component {
 
   bool authenticated_;
 
+  // The pairing-code write must not race service discovery: gateway 15 issued it ~13 s before
+  // discovery finished and never got a write confirmation. Send it once BOTH have completed,
+  // and retry if it is not confirmed.
+  void try_pairing_write_();
+  void send_pairing_code_();
+  bool auth_complete_{false};
+  bool search_complete_{false};
+  bool pairing_write_sent_{false};
+  uint8_t pairing_attempts_{0};
+
   sensor::Sensor *battery_{nullptr};
   sensor::Sensor *power_sensor_{nullptr};
   sensor::Sensor *energy_sensor_{nullptr};
